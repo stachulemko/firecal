@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FireCal · Burning Activity Calendar</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1c1 3 4 4 4 8a4 4 0 0 1-8 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-5 0-7z' fill='%23e0632a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <h1>FireCal</h1>
+      <p class="subtitle">Harmonized burning activity calendar · MODIS + VIIRS active fire hotspots since 2000</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="key-status" class="pill" title="FIRMS MAP_KEY closes the gap between the yearly archive and the last 7 days"></span>
+    <button id="theme-toggle" class="btn ghost" aria-label="Toggle light or dark theme">Light / dark</button>
+  </div>
+</header>
+
+<section class="controls" aria-label="Area of interest">
+  <label class="field">
+    <span>Area of interest</span>
+    <select id="preset-select" aria-label="Area of interest"></select>
+  </label>
+  <label class="field">
+    <span>Find a country or region</span>
+    <input id="area-search" list="area-list" placeholder="e.g. Poland, California" autocomplete="off">
+    <datalist id="area-list"></datalist>
+  </label>
+  <button id="draw-btn" class="btn">Draw rectangle</button>
+  <label class="field small"><span>West</span><input id="bb-w" type="number" step="0.1"></label>
+  <label class="field small"><span>South</span><input id="bb-s" type="number" step="0.1"></label>
+  <label class="field small"><span>East</span><input id="bb-e" type="number" step="0.1"></label>
+  <label class="field small"><span>North</span><input id="bb-n" type="number" step="0.1"></label>
+  <button id="run-btn" class="btn primary">Analyse area</button>
+  <label class="check"><input id="force" type="checkbox"> refresh data</label>
+  <div id="progress" class="progress" hidden>
+    <div class="bar"><div class="fill"></div></div>
+    <div class="msg" aria-live="polite"></div>
+  </div>
+  <p class="hint" id="area-hint">Any place on Earth: pick a country or region, click it on the map, or draw a rectangle.</p>
+</section>
+
+<main>
+  <section class="overview">
+    <div class="map-card card">
+      <div id="map" aria-label="Map of the area of interest"></div>
+      <div class="map-controls">
+        <label class="field inline"><span>Map layer</span>
+          <select id="map-layer">
+            <option value="mean_annual">Normal year: activity per cell</option>
+            <option value="burn_frequency">Years with fire (%)</option>
+            <option value="risk">Forecast: chance of fire</option>
+            <option value="recent7">Last 7 days</option>
+            <option value="world">World: fires in the last 7 days</option>
+          </select>
+        </label>
+        <label class="field inline" id="lead-wrap" hidden><span>Day</span>
+          <input id="map-lead" type="range" min="1" max="14" value="1"><output id="map-lead-out">+1</output></label>
+        <label class="check"><input id="show-hotspots" type="checkbox" checked> hotspots, last 7 days</label>
+      </div>
+      <div id="map-legend" class="legend-scale"></div>
+    </div>
+    <div class="summary">
+      <div id="summary-empty" class="empty">
+        <h2>Pick an area and press “Analyse area”</h2>
+        <p>FireCal downloads every active-fire hotspot NASA FIRMS has for the area, converts MODIS (1 km, 2000–) and
+          VIIRS (375 m, 2012–) detections into one consistent record, and builds a day-by-day burning calendar,
+          its normal pattern, unusual episodes and a 14-day forecast.</p>
+        <p class="muted">The first run of a new region downloads the yearly archives (a few minutes); later runs use the cache.</p>
+      </div>
+      <div id="summary" hidden>
+        <h2 id="aoi-name"></h2>
+        <p id="aoi-meta" class="muted"></p>
+        <div class="hero">
+          <div class="hero-label" id="hero-label">Last 7 days</div>
+          <div class="hero-value" id="hero-value"></div>
+          <div class="hero-delta" id="hero-delta"></div>
+        </div>
+        <div class="tiles" id="tiles"></div>
+        <div id="alert" class="alert" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button role="tab" aria-selected="true" data-tab="calendar">Calendar</button>
+    <button role="tab" aria-selected="false" data-tab="season">Normal pattern</button>
+    <button role="tab" aria-selected="false" data-tab="events">Unusual episodes</button>
+    <button role="tab" aria-selected="false" data-tab="forecast">Forecast</button>
+    <button role="tab" aria-selected="false" data-tab="sensors">Sensors &amp; harmonization</button>
+    <button role="tab" aria-selected="false" data-tab="about">Method &amp; data</button>
+  </nav>
+
+  <section class="tab-panel" id="tab-calendar" role="tabpanel">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h3>Burning activity calendar</h3>
+          <p class="muted">Each row is a year, each column a calendar day. Values are VIIRS S-NPP-equivalent hotspot
+            detections per day; years before 2012 are reconstructed from MODIS by the transfer model (marked ○) and
+            show the most likely count of each day. Click a row to compare that year with the normal pattern.</p>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Calendar colouring">
+          <button data-mode="activity" aria-pressed="true">Activity</button>
+          <button data-mode="anomaly" aria-pressed="false">Versus normal</button>
+        </div>
+      </div>
+      <div class="cal-wrap"><canvas id="cal-canvas" tabindex="0" aria-label="Calendar heat map"></canvas></div>
+      <div id="cal-legend" class="legend-scale"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h3>Month by month versus normal</h3>
+          <p class="muted">Monthly total relative to the median of the same month over the baseline years. Hover a cell for values.</p>
+        </div>
+      </div>
+      <div id="month-grid" class="month-grid"></div>
+      <div id="month-legend" class="legend-scale"></div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-season" role="tabpanel" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h3>Normal year and critical periods</h3>
+          <p class="muted" id="clim-sub"></p>
+        </div>
+        <label class="field inline"><span>Compare year</span><select id="year-select"></select></label>
+      </div>
+      <div class="legend" id="clim-legend"></div>
+      <div id="clim-chart" class="chart"></div>
+      <div id="periods" class="period-list"></div>
+    </div>
+    <div class="card">
+      <h3>Fire seasons</h3>
+      <p class="muted" id="season-sub"></p>
+      <div class="table-wrap"><table id="season-table" class="data"></table></div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-events" role="tabpanel" hidden>
+    <div class="card">
+      <h3>Unusual episodes</h3>
+      <p class="muted">Runs of days whose 7-day activity exceeded the 95th percentile for that time of year, ranked by
+        activity above the normal median. Click a row to show it in the calendar.</p>
+      <div class="table-wrap"><table id="event-table" class="data"></table></div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-forecast" role="tabpanel" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h3 id="fc-title">Next 14 days</h3>
+          <p class="muted" id="fc-sub"></p>
+        </div>
+        <div class="backtest">
+          <label class="field inline"><span>Issue forecast on a past date</span><input type="date" id="bt-date"></label>
+          <button id="bt-run" class="btn">Backtest</button>
+          <button id="bt-reset" class="btn ghost" hidden>Back to live</button>
+        </div>
+      </div>
+      <div class="legend" id="fc-legend"></div>
+      <div id="fc-chart" class="chart"></div>
+      <h4>Chance of a critical day <span class="muted">(activity above the 90th percentile for the date)</span></h4>
+      <div id="fc-prob" class="chart"></div>
+      <h4>Fire weather <span class="muted">(Canadian Fire Weather Index, area average; EFFIS danger classes)</span></h4>
+      <div id="fc-fwi" class="chart"></div>
+      <div class="table-wrap"><table id="fc-table" class="data compact"></table></div>
+    </div>
+    <div class="card">
+      <h3>How good is the forecast?</h3>
+      <p class="muted" id="skill-sub"></p>
+      <div class="table-wrap"><table id="skill-table" class="data compact"></table></div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>Seasonal outlook</h3>
+        <p class="muted" id="ol-sub"></p>
+        <div id="outlook"></div>
+      </div>
+      <div class="card">
+        <h3>What drives the model</h3>
+        <p class="muted">Share of the daily model's gain, top 12 inputs.</p>
+        <div id="importance" class="chart"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-sensors" role="tabpanel" hidden>
+    <div class="card">
+      <h3>One record from five satellite sensors</h3>
+      <p class="muted">Yearly totals. Raw MODIS counts are ~3× lower than VIIRS because its 1 km pixels miss small fires.
+        The harmonized series converts everything into VIIRS S-NPP-equivalent detections so years can be compared.</p>
+      <div class="legend" id="annual-legend"></div>
+      <div id="annual-chart" class="chart"></div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>Does the MODIS → VIIRS conversion work?</h3>
+        <p class="muted">Monthly totals in years when both sensors flew: VIIRS observed vs reconstructed from MODIS only
+          (out-of-sample).</p>
+        <div class="legend" id="val-legend"></div>
+        <div id="val-chart" class="chart"></div>
+      </div>
+      <div class="card">
+        <h3>Harmonization accuracy</h3>
+        <p class="muted">Agreement with VIIRS S-NPP observations on years held out from fitting. The expected value
+          is best for totals; the most likely day has the observed share of days without fire, so reconstructed
+          years look like observed ones in the calendar.</p>
+        <div class="table-wrap"><table id="harm-table" class="data compact"></table></div>
+        <h4>Sensor record</h4>
+        <div class="table-wrap"><table id="sensor-table" class="data compact"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-about" role="tabpanel" hidden>
+    <div class="card prose">
+      <h3>How FireCal works</h3>
+      <ol>
+        <li><strong>Area.</strong> Any country or territory of the world, any state or province of the nine largest
+          countries, or a drawn rectangle. Only the FIRMS country archives the area needs are downloaded.</li>
+        <li><strong>Data.</strong> NASA FIRMS active-fire hotspots: MODIS Terra/Aqua Collection 6.1 (1 km, Nov 2000–),
+          VIIRS S-NPP (375 m, 2012–), NOAA-20 (2018–) and NOAA-21 (2024–) from the public yearly country archive, the
+          keyless 7-day near-real-time feeds and (with a FIRMS MAP_KEY) the area API. Weather: NASA POWER daily
+          (MERRA-2) for history, Open-Meteo forecasts for the next 16 days. Climate: NOAA Oceanic Niño Index.</li>
+        <li><strong>Quality control.</strong> Low-confidence detections, volcanoes, industrial heat sources and offshore
+          flares are removed; sensor outages are detected so that “no data” is never read as “no fire”.</li>
+        <li><strong>Harmonization.</strong> A gradient-boosted (LightGBM, Poisson) transfer model learns, cell by cell
+          and day by day over the 2012–2020 overlap, how many VIIRS S-NPP detections correspond to what MODIS saw (Terra
+          and Aqua day/night counts, fire radiative power, pixel footprint, neighbouring days and cells, the cell's fire
+          regime). Its daily pattern is rescaled to the monthly VIIRS/MODIS ratio over ±15 days. Accuracy is measured by
+          cross-validation over whole years. NOAA-20/21 fill S-NPP gaps after rescaling.</li>
+        <li><strong>Expected vs most likely.</strong> The model estimates the <em>expected</em> VIIRS count, which is right
+          for totals but smoother than any real day: it almost never says “no fire”. A season-aware quantile mapping,
+          fitted on held-out years, turns it into the <em>most likely</em> count of the day, with the observed share of
+          quiet days and extremes. The calendar and daily statistics use the most likely count; totals, 7-day anomalies,
+          seasons and episodes use the expected value.</li>
+        <li><strong>Calendar.</strong> Day-of-year climatology pooled over ±15 days and all baseline years; anomalies
+          as percentiles of the 7-day activity; fire-season onset (10%), peak and end (90%) per fire year starting at the
+          quietest month; critical periods = the fewest calendar days holding 50% / 80% of normal activity.</li>
+        <li><strong>Forecast.</strong> Two LightGBM models per grid cell (chance of fire, expected detections) for 1–14
+          days ahead, driven by recent burning seen by all sensors, fire radiative power, the harmonized climatology,
+          weather on the target day, the Canadian Fire Weather Index system (FFMC, DMC, DC, ISI, BUI, FWI), drought and
+          ENSO. Area totals get empirical prediction intervals calibrated on unseen years. Each forecast day also shows
+          the area's Fire Weather Index with its EFFIS danger class. A ridge model gives a 1–3 month outlook.</li>
+      </ol>
+      <h3>Limits</h3>
+      <ul>
+        <li>Hotspots are thermal anomalies at overpass time; clouds, smoke and canopy hide fires, and counts are not
+          burned area.</li>
+        <li>The pre-2012 record is a model reconstruction with uncertainty (shown as bands and in the accuracy table);
+          small fires that MODIS cannot see are estimated from the cell's regime.</li>
+        <li>Without a FIRMS MAP_KEY the public archive ends with the last complete year and the near-real-time feed only
+          covers the last 7 days; the period in between is shown as “no data”. Add <code>FIRMS_MAP_KEY</code> to
+          <code>.env</code> to fill it.</li>
+        <li>Forecast skill is measured with observed weather (an upper bound); real forecasts degrade with weather
+          forecast error, mostly beyond 5–7 days. The lower bound (no weather forecast) is in the skill table.</li>
+      </ul>
+      <p><a id="csv-link" href="#" download>Download the harmonized daily series (CSV)</a></p>
+      <p class="muted">Data: NASA FIRMS (LANCE/EOSDIS), NASA POWER, Open-Meteo (CC BY 4.0), NOAA PSL/CPC, Natural Earth.
+        Map tiles © OpenStreetMap contributors.</p>
+    </div>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
